@@ -1,6 +1,8 @@
-import os
 import re
 import tempfile
+import threading
+import whisper
+import yt_dlp
 from flask import Flask, render_template, request, jsonify
 from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound
 from youtube_transcript_api._errors import (
@@ -9,27 +11,34 @@ from youtube_transcript_api._errors import (
     RequestBlocked,
     IpBlocked,
 )
-from openai import OpenAI
 
 app = Flask(__name__)
 
+# Load Whisper model once at startup (base = good balance of speed/accuracy)
+_whisper_model = None
+_whisper_lock = threading.Lock()
+
+
+def get_whisper_model():
+    global _whisper_model
+    with _whisper_lock:
+        if _whisper_model is None:
+            import os
+            model_name = os.environ.get("WHISPER_MODEL", "base")
+            _whisper_model = whisper.load_model(model_name)
+    return _whisper_model
+
 
 def extract_video_id(url: str) -> str | None:
-    patterns = [
-        r"(?:v=|youtu\.be/|embed/|shorts/)([a-zA-Z0-9_-]{11})",
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, url)
-        if match:
-            return match.group(1)
-    return None
+    match = re.search(r"(?:v=|youtu\.be/|embed/|shorts/)([a-zA-Z0-9_-]{11})", url)
+    return match.group(1) if match else None
 
 
 def fetch_youtube_transcript(video_id: str) -> tuple[str, str]:
     api = YouTubeTranscriptApi()
     transcript_list = api.list(video_id)
 
-    # Prefer manually created, then auto-generated
+    # Prefer manually created captions, fall back to auto-generated
     try:
         transcript = transcript_list.find_manually_created_transcript(
             ["nl", "en", "de", "fr", "es"]
@@ -46,17 +55,10 @@ def fetch_youtube_transcript(video_id: str) -> tuple[str, str]:
 
 
 def transcribe_with_whisper(video_id: str) -> tuple[str, str]:
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        raise ValueError("OPENAI_API_KEY is niet ingesteld")
-
-    import yt_dlp
-
     with tempfile.TemporaryDirectory() as tmpdir:
-        audio_path = os.path.join(tmpdir, "audio.mp3")
         ydl_opts = {
             "format": "bestaudio/best",
-            "outtmpl": os.path.join(tmpdir, "audio.%(ext)s"),
+            "outtmpl": f"{tmpdir}/audio.%(ext)s",
             "postprocessors": [
                 {
                     "key": "FFmpegExtractAudio",
@@ -69,14 +71,10 @@ def transcribe_with_whisper(video_id: str) -> tuple[str, str]:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([f"https://www.youtube.com/watch?v={video_id}"])
 
-        client = OpenAI(api_key=api_key)
-        with open(audio_path, "rb") as audio_file:
-            response = client.audio.transcriptions.create(
-                model="whisper-1",
-                file=audio_file,
-            )
+        model = get_whisper_model()
+        result = model.transcribe(f"{tmpdir}/audio.mp3")
 
-    return response.text, "OpenAI Whisper"
+    return result["text"], f"Whisper ({result.get('language', 'onbekend')})"
 
 
 @app.route("/")
@@ -98,14 +96,14 @@ def transcribe():
 
     whisper_reason = None
 
-    # Try YouTube transcript first
+    # Try YouTube subtitles first (fast, no download needed)
     try:
         text, method = fetch_youtube_transcript(video_id)
         return jsonify({"transcript": text, "method": method, "video_id": video_id})
     except VideoUnavailable:
         return jsonify({"error": "Video is niet beschikbaar of privé"}), 400
     except (TranscriptsDisabled, NoTranscriptFound):
-        whisper_reason = "Geen YouTube-ondertitels beschikbaar"
+        whisper_reason = "geen YouTube-ondertitels beschikbaar"
     except (RequestBlocked, IpBlocked):
         whisper_reason = "YouTube blokkeerde het verzoek"
     except YouTubeTranscriptApiException as e:
@@ -114,16 +112,12 @@ def transcribe():
         app.logger.warning("Transcript API fout: %s", e)
         whisper_reason = str(e)
 
-    app.logger.info("YouTube transcript niet beschikbaar (%s), probeer Whisper", whisper_reason)
+    app.logger.info("Whisper fallback gestart: %s", whisper_reason)
 
-    # Fallback to Whisper
+    # Fallback: download audio and transcribe locally with Whisper
     try:
         text, method = transcribe_with_whisper(video_id)
         return jsonify({"transcript": text, "method": method, "video_id": video_id})
-    except ValueError as e:
-        return jsonify({
-            "error": f"Geen ondertitels gevonden ({whisper_reason}) en geen OpenAI API-sleutel ingesteld voor Whisper"
-        }), 400
     except Exception as e:
         return jsonify({"error": f"Transcriptie mislukt: {e}"}), 500
 
