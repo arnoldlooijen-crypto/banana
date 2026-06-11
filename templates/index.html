@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>YouTube Transcriptie</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>YouTube Transcriptie</h1>
+      <p class="subtitle">Plak een YouTube-link en ontvang direct de volledige tekst</p>
+    </header>
+
+    <form id="transcribe-form">
+      <div class="input-row">
+        <input
+          type="url"
+          id="url-input"
+          placeholder="https://www.youtube.com/watch?v=..."
+          required
+          autocomplete="off"
+        />
+        <button type="submit" id="submit-btn">Transcribeer</button>
+      </div>
+    </form>
+
+    <div id="status" class="status hidden"></div>
+
+    <div id="result-card" class="result-card hidden">
+      <div class="result-header">
+        <div class="result-meta">
+          <span id="method-badge" class="badge"></span>
+          <a id="video-link" href="#" target="_blank" rel="noopener">Video bekijken</a>
+        </div>
+        <button id="copy-btn" class="copy-btn" title="Kopieer tekst">Kopieer</button>
+      </div>
+      <div id="transcript-text" class="transcript-text"></div>
+    </div>
+  </div>
+
+  <script>
+    const form = document.getElementById("transcribe-form");
+    const input = document.getElementById("url-input");
+    const submitBtn = document.getElementById("submit-btn");
+    const status = document.getElementById("status");
+    const resultCard = document.getElementById("result-card");
+    const transcriptText = document.getElementById("transcript-text");
+    const methodBadge = document.getElementById("method-badge");
+    const videoLink = document.getElementById("video-link");
+    const copyBtn = document.getElementById("copy-btn");
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const url = input.value.trim();
+
+      setLoading(true);
+      showStatus("Bezig met transcriberen...", "loading");
+      resultCard.classList.add("hidden");
+
+      try {
+        const res = await fetch("/transcribe", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url }),
+        });
+        const data = await res.json();
+
+        if (!res.ok) {
+          showStatus(data.error || "Er is een fout opgetreden", "error");
+          return;
+        }
+
+        methodBadge.textContent = data.method;
+        videoLink.href = `https://www.youtube.com/watch?v=${data.video_id}`;
+        transcriptText.textContent = data.transcript;
+        resultCard.classList.remove("hidden");
+        status.classList.add("hidden");
+      } catch {
+        showStatus("Verbindingsfout. Probeer het opnieuw.", "error");
+      } finally {
+        setLoading(false);
+      }
+    });
+
+    copyBtn.addEventListener("click", () => {
+      navigator.clipboard.writeText(transcriptText.textContent).then(() => {
+        copyBtn.textContent = "Gekopieerd!";
+        setTimeout(() => (copyBtn.textContent = "Kopieer"), 2000);
+      });
+    });
+
+    function setLoading(loading) {
+      submitBtn.disabled = loading;
+      submitBtn.textContent = loading ? "Bezig..." : "Transcribeer";
+    }
+
+    function showStatus(message, type) {
+      status.textContent = message;
+      status.className = `status ${type}`;
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,4 @@
+flask>=3.0
+youtube-transcript-api>=0.6
+yt-dlp>=2024.1
+openai-whisper>=20230918
