@@ -280,6 +280,21 @@ function guessMimeType(fileName: string): string {
             return 'video/quicktime';
         case '.webm':
             return 'video/webm';
+        case '.mp3':
+            return 'audio/mpeg';
+        case '.wav':
+            return 'audio/wav';
+        case '.m4a':
+            return 'audio/mp4';
+        case '.aac':
+            return 'audio/aac';
+        case '.ogg':
+        case '.oga':
+            return 'audio/ogg';
+        case '.flac':
+            return 'audio/flac';
+        case '.opus':
+            return 'audio/opus';
         default:
             return 'application/octet-stream';
     }
