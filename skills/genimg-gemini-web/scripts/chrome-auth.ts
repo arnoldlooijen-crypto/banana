@@ -241,6 +241,9 @@ export async function getGeminiCookieMapViaChrome(options?: {
     const port = await getFreePort();
     log?.(`[gemini-web] Launching Chrome for cookie sync (profile: ${userDataDir})`);
 
+    // Chrome refuses to start as root without --no-sandbox (common in containers/CI).
+    const runningAsRoot = typeof process.getuid === 'function' && process.getuid() === 0;
+
     const chrome = spawn(
         chromePath,
         [
@@ -250,6 +253,7 @@ export async function getGeminiCookieMapViaChrome(options?: {
             '--no-default-browser-check',
             '--disable-blink-features=AutomationControlled',
             '--start-maximized',
+            ...(runningAsRoot ? ['--no-sandbox', '--disable-setuid-sandbox'] : []),
             GEMINI_URL,
         ],
         { stdio: 'ignore' },
